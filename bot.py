@@ -4,16 +4,14 @@ from telegram import Bot
 import os
 import time
 
-# --- CONFIG ---
 TOKEN = os.getenv("TOKEN")
 CHAT_ID = int(os.getenv("CHAT_ID"))
 API_KEY = os.getenv("API_KEY")
 
 previous_stats = {}
 sent_matches = {}
-COOLDOWN = 600  # 10 minuti
+COOLDOWN = 480  # 8 minuti
 
-# --- PARTITE LIVE ---
 def get_matches():
     url = "https://v3.football.api-sports.io/fixtures?live=all"
     headers = {"x-apisports-key": API_KEY}
@@ -23,7 +21,6 @@ def get_matches():
 
     return data.get("response", [])
 
-# --- QUOTE NEXT GOAL ---
 def get_odds(fixture_id):
     url = f"https://v3.football.api-sports.io/odds?fixture={fixture_id}"
     headers = {"x-apisports-key": API_KEY}
@@ -38,27 +35,21 @@ def get_odds(fixture_id):
         for bet in bets:
             if bet["name"] == "Next Goal":
                 odds = bet["values"]
-
-                home_odd = float(odds[0]["odd"])
-                away_odd = float(odds[1]["odd"])
-
-                return home_odd, away_odd
+                return float(odds[0]["odd"]), float(odds[1]["odd"])
     except:
         return None
 
     return None
 
-# --- CHECK MATCH PRO ---
 def check_match(match):
     try:
         fixture = match["fixture"]
         match_id = fixture["id"]
         minute = fixture["status"]["elapsed"]
 
-        if minute is None or minute < 30 or minute > 80:
+        if minute is None or minute < 25 or minute > 85:
             return None
 
-        # --- cooldown ---
         now = time.time()
         if match_id in sent_matches:
             if now - sent_matches[match_id] < COOLDOWN:
@@ -80,7 +71,6 @@ def check_match(match):
         home = stats[0]["statistics"]
         away = stats[1]["statistics"]
 
-        # --- STATS ---
         shots_on_target_home = int(home[0]["value"] or 0)
         shots_on_target_away = int(away[0]["value"] or 0)
 
@@ -94,11 +84,10 @@ def check_match(match):
         total_shots = shots_home + shots_away
         total_danger = dangerous_home + dangerous_away
 
-        # --- BASE FILTER ---
-        if total_shots_on_target < 6 or total_danger < 35:
+        # 🔥 FILTRO PIÙ MORBIDO
+        if total_shots_on_target < 5 or total_danger < 30:
             return None
 
-        # --- TREND ---
         prev = previous_stats.get(match_id, {"danger": 0, "shots": 0})
 
         danger_increase = total_danger - prev["danger"]
@@ -109,39 +98,40 @@ def check_match(match):
             "shots": total_shots,
         }
 
-        if danger_increase < 6 and shots_increase < 3:
+        # 📈 TREND PIÙ ACCESSIBILE
+        if danger_increase < 4 and shots_increase < 2:
             return None
 
-        # --- DOMINANCE ---
+        # 💣 DOMINIO
         if dangerous_home > dangerous_away:
             dominance = dangerous_home - dangerous_away
             attacking_team = match["teams"]["home"]["name"]
-            attacking_side = "home"
+            side = "home"
         else:
             dominance = dangerous_away - dangerous_home
             attacking_team = match["teams"]["away"]["name"]
-            attacking_side = "away"
+            side = "away"
 
-        if dominance < 12:
+        if dominance < 8:
             return None
 
-        # --- QUOTE ---
+        # 💰 QUOTE
         odds = get_odds(match_id)
         if not odds:
             return None
 
         home_odd, away_odd = odds
-        odd = home_odd if attacking_side == "home" else away_odd
+        odd = home_odd if side == "home" else away_odd
 
-        # --- VALUE FILTER PRO ---
-        if odd < 1.50 or odd > 2.10:
+        # 🎯 RANGE PIÙ LARGO
+        if odd < 1.40 or odd > 2.40:
             return None
 
-        # --- FINAL ENTRY ---
+        # 🚨 ENTRY
         if (
-            total_shots_on_target >= 8
-            and total_danger >= 45
-            and (danger_increase >= 8 or shots_increase >= 4)
+            total_shots_on_target >= 6
+            and total_danger >= 35
+            and (danger_increase >= 5 or shots_increase >= 3)
         ):
             return ("ENTRY", attacking_team, odd)
 
@@ -150,7 +140,6 @@ def check_match(match):
 
     return None
 
-# --- BOT ---
 async def main():
     bot = Bot(token=TOKEN)
 
@@ -158,14 +147,13 @@ async def main():
         matches = get_matches()
 
         for match in matches:
-            match_id = match["fixture"]["id"]
-
             result = check_match(match)
 
             if not result:
                 continue
 
-            signal, team, odd = result
+            match_id = match["fixture"]["id"]
+            team, odd = result[1], result[2]
 
             home = match["teams"]["home"]["name"]
             away = match["teams"]["away"]["name"]
@@ -174,14 +162,14 @@ async def main():
             goals_away = match["goals"]["away"]
 
             text = (
-                f"🚨 ELITE ENTRY 🚨\n"
+                f"🔥 ENTRY BALANCED 🔥\n"
                 f"{home} vs {away}\n"
                 f"⚽ {goals_home}-{goals_away}\n"
                 f"⏱ {minute}'\n"
-                f"🔥 Team: {team}\n"
+                f"💣 Attacco: {team}\n"
                 f"💰 Quota: {odd}\n"
-                f"📊 Pressione PRO\n"
-                f"🎯 NEXT GOAL PROB"
+                f"📈 Pressione + Trend\n"
+                f"🎯 NEXT GOAL"
             )
 
             await bot.send_message(chat_id=CHAT_ID, text=text)
@@ -190,5 +178,4 @@ async def main():
 
         await asyncio.sleep(30)
 
-# --- AVVIO ---
 asyncio.run(main())
