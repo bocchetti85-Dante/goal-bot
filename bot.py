@@ -15,6 +15,31 @@ sent_matches = set()
 
 # --- PARTITE LIVE ---
 def get_matches():
+    # --- QUOTE LIVE ---
+def get_odds(fixture_id):
+    url = f"https://v3.football.api-sports.io/odds?fixture={fixture_id}"
+    headers = {"x-apisports-key": API_KEY}
+
+    response = requests.get(url, headers=headers)
+    data = response.json()
+
+    try:
+        bookmakers = data["response"][0]["bookmakers"]
+        bets = bookmakers[0]["bets"]
+
+        for bet in bets:
+            if bet["name"] == "Match Winner":
+                odds = bet["values"]
+
+                home_odd = float(odds[0]["odd"])
+                draw_odd = float(odds[1]["odd"])
+                away_odd = float(odds[2]["odd"])
+
+                return home_odd, draw_odd, away_odd
+    except:
+        return None
+
+    return None
     url = "https://v3.football.api-sports.io/fixtures?live=all"
     headers = {"x-apisports-key": API_KEY}
 
@@ -28,6 +53,13 @@ def check_match(match):
     try:
         fixture = match["fixture"]
         match_id = fixture["id"]
+        # 💰 PRENDO QUOTE
+odds = get_odds(match_id)
+
+if not odds:
+    return None
+
+home_odd, draw_odd, away_odd = odds
         minute = fixture["status"]["elapsed"]
 
         goals_home = match["goals"]["home"]
@@ -84,6 +116,19 @@ def check_match(match):
         else:
             dominance = dangerous_away - dangerous_home
             attacking_team = match["teams"]["away"]["name"]
+            # 💰 filtro quote
+
+if attacking_team == match["teams"]["home"]["name"]:
+    team_odd = home_odd
+else:
+    team_odd = away_odd
+
+# filtri intelligenti
+if team_odd < 1.40:
+    return None
+
+if team_odd > 3.50:
+    return None
 
         # 🚨 ENTRY ORA (EDGE PRO)
         if total_shots_on_target >= 6 and total_danger >= 35:
