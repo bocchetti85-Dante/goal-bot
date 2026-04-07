@@ -103,7 +103,7 @@ def check_match(match):
 # --- BOT ---
 async def main():
     bot = Bot(token=TOKEN)
-    await bot.send_message(chat_id=CHAT_ID, text="✅ BOT ONLINE")
+    
     while True:
         matches = get_matches()
 
