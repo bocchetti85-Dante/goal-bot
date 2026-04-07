@@ -9,28 +9,24 @@ CHAT_ID = int(os.getenv("CHAT_ID"))
 API_KEY = os.getenv("API_KEY")
 
 previous_stats = {}
+previous_odds = {}
 sent_matches = {}
-COOLDOWN = 480  # 8 minuti
+COOLDOWN = 480  # 8 min
 
+# --- MATCH ---
 def get_matches():
     url = "https://v3.football.api-sports.io/fixtures?live=all"
     headers = {"x-apisports-key": API_KEY}
+    return requests.get(url, headers=headers).json().get("response", [])
 
-    response = requests.get(url, headers=headers)
-    data = response.json()
-
-    return data.get("response", [])
-
+# --- ODDS NEXT GOAL ---
 def get_odds(fixture_id):
     url = f"https://v3.football.api-sports.io/odds?fixture={fixture_id}"
     headers = {"x-apisports-key": API_KEY}
 
     try:
-        response = requests.get(url, headers=headers, timeout=5)
-        data = response.json()
-
-        bookmakers = data["response"][0]["bookmakers"]
-        bets = bookmakers[0]["bets"]
+        data = requests.get(url, headers=headers, timeout=5).json()
+        bets = data["response"][0]["bookmakers"][0]["bets"]
 
         for bet in bets:
             if bet["name"] == "Next Goal":
@@ -41,6 +37,7 @@ def get_odds(fixture_id):
 
     return None
 
+# --- LOGICA PRO ---
 def check_match(match):
     try:
         fixture = match["fixture"]
@@ -58,10 +55,7 @@ def check_match(match):
         goals_home = match["goals"]["home"]
         goals_away = match["goals"]["away"]
 
-        if not (
-            (goals_home == 0 and goals_away == 0)
-            or abs(goals_home - goals_away) == 1
-        ):
+        if not ((goals_home == 0 and goals_away == 0) or abs(goals_home - goals_away) == 1):
             return None
 
         stats = match.get("statistics")
@@ -73,49 +67,42 @@ def check_match(match):
 
         shots_on_target_home = int(home[0]["value"] or 0)
         shots_on_target_away = int(away[0]["value"] or 0)
-
         shots_home = int(home[2]["value"] or 0)
         shots_away = int(away[2]["value"] or 0)
-
         dangerous_home = int(home[9]["value"] or 0)
         dangerous_away = int(away[9]["value"] or 0)
 
-        total_shots_on_target = shots_on_target_home + shots_on_target_away
+        total_sot = shots_on_target_home + shots_on_target_away
         total_shots = shots_home + shots_away
         total_danger = dangerous_home + dangerous_away
 
-        # 🔥 FILTRO PIÙ MORBIDO
-        if total_shots_on_target < 5 or total_danger < 30:
+        if total_sot < 5 or total_danger < 30:
             return None
 
         prev = previous_stats.get(match_id, {"danger": 0, "shots": 0})
 
-        danger_increase = total_danger - prev["danger"]
-        shots_increase = total_shots - prev["shots"]
+        danger_inc = total_danger - prev["danger"]
+        shots_inc = total_shots - prev["shots"]
 
-        previous_stats[match_id] = {
-            "danger": total_danger,
-            "shots": total_shots,
-        }
+        previous_stats[match_id] = {"danger": total_danger, "shots": total_shots}
 
-        # 📈 TREND PIÙ ACCESSIBILE
-        if danger_increase < 4 and shots_increase < 2:
+        if danger_inc < 4 and shots_inc < 2:
             return None
 
-        # 💣 DOMINIO
+        # DOMINANCE
         if dangerous_home > dangerous_away:
             dominance = dangerous_home - dangerous_away
-            attacking_team = match["teams"]["home"]["name"]
+            team = match["teams"]["home"]["name"]
             side = "home"
         else:
             dominance = dangerous_away - dangerous_home
-            attacking_team = match["teams"]["away"]["name"]
+            team = match["teams"]["away"]["name"]
             side = "away"
 
         if dominance < 8:
             return None
 
-        # 💰 QUOTE
+        # ODDS
         odds = get_odds(match_id)
         if not odds:
             return None
@@ -123,26 +110,32 @@ def check_match(match):
         home_odd, away_odd = odds
         odd = home_odd if side == "home" else away_odd
 
-        # 🎯 RANGE PIÙ LARGO
         if odd < 1.40 or odd > 2.40:
             return None
 
+        # 💣 MOVIMENTO QUOTE (SIMULAZIONE BETFAIR)
+        prev_odd = previous_odds.get(match_id, odd)
+        odds_drop = prev_odd - odd
+
+        previous_odds[match_id] = odd
+
+        if odds_drop <= 0:
+            return None
+
         # 🚨 ENTRY
-        if (
-            total_shots_on_target >= 6
-            and total_danger >= 35
-            and (danger_increase >= 5 or shots_increase >= 3)
-        ):
-            return ("ENTRY", attacking_team, odd)
+        if total_sot >= 6 and total_danger >= 35:
+            if danger_inc >= 5 or shots_inc >= 3:
+                return ("ENTRY", team, odd)
 
     except:
         return None
 
     return None
 
+# --- BOT ---
 async def main():
     bot = Bot(token=TOKEN)
-    
+
     while True:
         matches = get_matches()
 
@@ -162,13 +155,14 @@ async def main():
             goals_away = match["goals"]["away"]
 
             text = (
-                f"🔥 ENTRY BALANCED 🔥\n"
+                f"💣 PRO SIGNAL 💣\n"
                 f"{home} vs {away}\n"
                 f"⚽ {goals_home}-{goals_away}\n"
                 f"⏱ {minute}'\n"
-                f"💣 Attacco: {team}\n"
+                f"🔥 Team: {team}\n"
                 f"💰 Quota: {odd}\n"
-                f"📈 Pressione + Trend\n"
+                f"📉 Quota in discesa\n"
+                f"📊 Pressione reale\n"
                 f"🎯 NEXT GOAL"
             )
 
