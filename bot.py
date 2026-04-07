@@ -85,11 +85,20 @@ def check_match(match):
             dominance = dangerous_away - dangerous_home
             attacking_team = match["teams"]["away"]["name"]
 
-        # 🚨 ENTRY ORA (EDGE)
-        if total_shots_on_target >= 7 and total_danger >= 40:
-            if dominance >= 10:
-                if danger_increase >= 8 or shots_increase >= 4:
-                    return ("ENTRY", attacking_team)
+        # 🚨 ENTRY ORA (EDGE PRO)
+        if total_shots_on_target >= 6 and total_danger >= 35:
+
+           # Dominio reale
+           if dominance >= 12:
+
+              # Pressione crescente forte
+              if danger_increase >= 7 and shots_increase >= 3:
+
+                 # Extra filtro qualità (chi attacca deve tirare davvero)
+                 if (shots_on_target_home >= 4 or shots_on_target_away >= 4):
+
+                return ("ENTRY", attacking_team)
+        
 
         # ⚠️ WATCH
         if danger_increase >= 5 or shots_increase >= 3:
