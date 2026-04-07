@@ -5,9 +5,9 @@ from telegram import Bot
 # --- CONFIG ---
 import os
 
-TOKEN = os.getenv("8045116031:AAHO7Yj7QzUshsAZHkyUV7O8Qyw1arQV5Hw")
-CHAT_ID = int(os.getenv("280170968"))
-API_KEY = os.getenv("9ff6c8cdc6e9c52e94f124f60ca7f4d8")
+TOKEN = os.getenv("TOKEN")
+CHAT_ID = int(os.getenv("CHAT_ID"))
+API_KEY = os.getenv("API_KEY")
 
 
 previous_stats = {}
