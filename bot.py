@@ -1,21 +1,28 @@
 import asyncio
 import requests
 from telegram import Bot
-
-# --- CONFIG ---
 import os
 
+# --- CONFIG (da Railway Variables) ---
 TOKEN = os.getenv("TOKEN")
 CHAT_ID = int(os.getenv("CHAT_ID"))
 API_KEY = os.getenv("API_KEY")
 
-
 previous_stats = {}
+previous_odds = {}
 sent_matches = set()
 
 # --- PARTITE LIVE ---
 def get_matches():
-    # --- QUOTE LIVE ---
+    url = "https://v3.football.api-sports.io/fixtures?live=all"
+    headers = {"x-apisports-key": API_KEY}
+
+    response = requests.get(url, headers=headers)
+    data = response.json()
+
+    return data["response"]
+
+# --- QUOTE LIVE ---
 def get_odds(fixture_id):
     url = f"https://v3.football.api-sports.io/odds?fixture={fixture_id}"
     headers = {"x-apisports-key": API_KEY}
@@ -40,27 +47,20 @@ def get_odds(fixture_id):
         return None
 
     return None
-    url = "https://v3.football.api-sports.io/fixtures?live=all"
-    headers = {"x-apisports-key": API_KEY}
 
-    response = requests.get(url, headers=headers)
-    data = response.json()
-
-    return data["response"]
-
-# --- LOGICA ELITE + EDGE ---
+# --- LOGICA ---
 def check_match(match):
     try:
         fixture = match["fixture"]
         match_id = fixture["id"]
-        # 💰 PRENDO QUOTE
-odds = get_odds(match_id)
-
-if not odds:
-    return None
-
-home_odd, draw_odd, away_odd = odds
         minute = fixture["status"]["elapsed"]
+
+        # 💰 PRENDO QUOTE
+        odds = get_odds(match_id)
+        if not odds:
+            return None
+
+        home_odd, draw_odd, away_odd = odds
 
         goals_home = match["goals"]["home"]
         goals_away = match["goals"]["away"]
@@ -109,41 +109,37 @@ home_odd, draw_odd, away_odd = odds
             "shots": total_shots
         }
 
-        # 💣 EDGE DOMINIO (chi attacca davvero)
+        # 💣 DOMINIO
         if dangerous_home > dangerous_away:
             dominance = dangerous_home - dangerous_away
             attacking_team = match["teams"]["home"]["name"]
+            team_odd = home_odd
         else:
             dominance = dangerous_away - dangerous_home
             attacking_team = match["teams"]["away"]["name"]
-            # 💰 filtro quote
+            team_odd = away_odd
 
-if attacking_team == match["teams"]["home"]["name"]:
-    team_odd = home_odd
-else:
-    team_odd = away_odd
+        # 💰 FILTRO QUOTE
+        if team_odd < 1.40:
+            return None
 
-# filtri intelligenti
-if team_odd < 1.40:
-    return None
+        if team_odd > 3.50:
+            return None
 
-if team_odd > 3.50:
-    return None
+        # 📉 MOVIMENTO QUOTE
+        prev_odd = previous_odds.get(match_id, team_odd)
+        odds_drop = prev_odd - team_odd
 
-        # 🚨 ENTRY ORA (EDGE PRO)
-        if total_shots_on_target >= 6 and total_danger >= 35:
+        previous_odds[match_id] = team_odd
 
-           # Dominio reale
-           if dominance >= 12:
+        if odds_drop <= 0:
+            return None
 
-              # Pressione crescente forte
-              if danger_increase >= 7 and shots_increase >= 3:
-
-                 # Extra filtro qualità (chi attacca deve tirare davvero)
-                 if (shots_on_target_home >= 4 or shots_on_target_away >= 4):
-
-                return ("ENTRY", attacking_team)
-        
+        # 🚨 ENTRY
+        if total_shots_on_target >= 7 and total_danger >= 40:
+            if dominance >= 10:
+                if danger_increase >= 8 or shots_increase >= 4:
+                    return ("ENTRY", attacking_team)
 
         # ⚠️ WATCH
         if danger_increase >= 5 or shots_increase >= 3:
@@ -157,7 +153,7 @@ if team_odd > 3.50:
 # --- BOT ---
 async def main():
     bot = Bot(token=TOKEN)
-    
+
     while True:
         matches = get_matches()
 
@@ -187,8 +183,7 @@ async def main():
                     f"⚽ {goals_home}-{goals_away}\n"
                     f"⏱ {minute}'\n"
                     f"🔥 Dominio: {team}\n"
-                    f"📈 Pressione ESTREMA\n"
-                    f"👉 GOAL IMMINENTE\n"
+                    f"📉 Quota in calo\n"
                     f"💰 ENTRA ORA"
                 )
 
