@@ -37,18 +37,18 @@ def get_odds(fixture_id):
 
     return None
 
-# --- LOGICA MIGLIORATA ---
+# --- LOGICA PRO + EDGE ---
 def check_match(match):
     try:
         fixture = match["fixture"]
         match_id = fixture["id"]
         minute = fixture["status"]["elapsed"]
 
-        # ⏱ PIÙ PARTITE
+        # ⏱ filtro tempo
         if minute is None or minute < 20 or minute > 88:
             return None
 
-        # ⏳ COOLDOWN
+        # ⏳ cooldown
         now = time.time()
         if match_id in sent_matches:
             if now - sent_matches[match_id] < COOLDOWN:
@@ -78,7 +78,7 @@ def check_match(match):
         total_shots = shots_home + shots_away
         total_danger = dangerous_home + dangerous_away
 
-        # 🔥 PIÙ APERTO
+        # 🔥 pressione base
         if total_sot < 4 or total_danger < 25:
             return None
 
@@ -89,11 +89,15 @@ def check_match(match):
 
         previous_stats[match_id] = {"danger": total_danger, "shots": total_shots}
 
-        # 📈 TREND PIÙ FACILE
+        # 💣 EDGE PROFESSIONALE (ACCELERAZIONE)
+        if danger_inc < 5:
+            return None
+
+        # 📈 trend
         if danger_inc < 3 and shots_inc < 1:
             return None
 
-        # 💣 DOMINIO PIÙ LARGO
+        # 💣 dominio
         if dangerous_home > dangerous_away:
             dominance = dangerous_home - dangerous_away
             team = match["teams"]["home"]["name"]
@@ -106,7 +110,7 @@ def check_match(match):
         if dominance < 6:
             return None
 
-        # 💰 ODDS (NON MODIFICATE)
+        # 💰 quote (NON MODIFICATE)
         odds = get_odds(match_id)
         if not odds:
             return None
@@ -114,11 +118,10 @@ def check_match(match):
         home_odd, away_odd = odds
         odd = home_odd if side == "home" else away_odd
 
-        # RANGE ORIGINALE
-        if odd < 1.80 or odd > 4.00:
+        if odd < 1.40 or odd > 2.40:
             return None
 
-        # 💣 MOVIMENTO QUOTA FIXATO
+        # 📉 movimento quota
         prev_odd = previous_odds.get(match_id, odd)
         odds_drop = prev_odd - odd
 
@@ -160,14 +163,14 @@ async def main():
             goals_away = match["goals"]["away"]
 
             text = (
-                f"💣 PRO SIGNAL 💣\n"
+                f"💣 PRO EDGE SIGNAL 💣\n"
                 f"{home} vs {away}\n"
                 f"⚽ {goals_home}-{goals_away}\n"
                 f"⏱ {minute}'\n"
                 f"🔥 Team: {team}\n"
                 f"💰 Quota: {odd}\n"
+                f"🚀 Accelerazione attacchi\n"
                 f"📉 Movimento quota\n"
-                f"📊 Pressione reale\n"
                 f"🎯 NEXT GOAL"
             )
 
