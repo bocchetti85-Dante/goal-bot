@@ -118,7 +118,7 @@ def check_match(match):
         home_odd, away_odd = odds
         odd = home_odd if side == "home" else away_odd
 
-        if odd < 1.40 or odd > 2.40:
+        if odd < 1.80 or odd > 3.5:
             return None
 
         # 📉 movimento quota
