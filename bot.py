@@ -37,16 +37,18 @@ def get_odds(fixture_id):
 
     return None
 
-# --- LOGICA PRO ---
+# --- LOGICA MIGLIORATA ---
 def check_match(match):
     try:
         fixture = match["fixture"]
         match_id = fixture["id"]
         minute = fixture["status"]["elapsed"]
 
-        if minute is None or minute < 25 or minute > 85:
+        # ⏱ PIÙ PARTITE
+        if minute is None or minute < 20 or minute > 88:
             return None
 
+        # ⏳ COOLDOWN
         now = time.time()
         if match_id in sent_matches:
             if now - sent_matches[match_id] < COOLDOWN:
@@ -76,7 +78,8 @@ def check_match(match):
         total_shots = shots_home + shots_away
         total_danger = dangerous_home + dangerous_away
 
-        if total_sot < 5 or total_danger < 30:
+        # 🔥 PIÙ APERTO
+        if total_sot < 4 or total_danger < 25:
             return None
 
         prev = previous_stats.get(match_id, {"danger": 0, "shots": 0})
@@ -86,10 +89,11 @@ def check_match(match):
 
         previous_stats[match_id] = {"danger": total_danger, "shots": total_shots}
 
-        if danger_inc < 4 and shots_inc < 2:
+        # 📈 TREND PIÙ FACILE
+        if danger_inc < 3 and shots_inc < 1:
             return None
 
-        # DOMINANCE
+        # 💣 DOMINIO PIÙ LARGO
         if dangerous_home > dangerous_away:
             dominance = dangerous_home - dangerous_away
             team = match["teams"]["home"]["name"]
@@ -99,10 +103,10 @@ def check_match(match):
             team = match["teams"]["away"]["name"]
             side = "away"
 
-        if dominance < 8:
+        if dominance < 6:
             return None
 
-        # ODDS
+        # 💰 ODDS (NON MODIFICATE)
         odds = get_odds(match_id)
         if not odds:
             return None
@@ -110,21 +114,22 @@ def check_match(match):
         home_odd, away_odd = odds
         odd = home_odd if side == "home" else away_odd
 
-        if odd < 1.40 or odd > 2.40:
+        # RANGE ORIGINALE
+        if odd < 1.80 or odd > 4.00:
             return None
 
-        # 💣 MOVIMENTO QUOTE (SIMULAZIONE BETFAIR)
+        # 💣 MOVIMENTO QUOTA FIXATO
         prev_odd = previous_odds.get(match_id, odd)
         odds_drop = prev_odd - odd
 
         previous_odds[match_id] = odd
 
-        if odds_drop <= 0:
+        if odds_drop < -0.05:
             return None
 
         # 🚨 ENTRY
-        if total_sot >= 6 and total_danger >= 35:
-            if danger_inc >= 5 or shots_inc >= 3:
+        if total_sot >= 5 and total_danger >= 30:
+            if danger_inc >= 4 or shots_inc >= 2:
                 return ("ENTRY", team, odd)
 
     except:
@@ -161,7 +166,7 @@ async def main():
                 f"⏱ {minute}'\n"
                 f"🔥 Team: {team}\n"
                 f"💰 Quota: {odd}\n"
-                f"📉 Quota in discesa\n"
+                f"📉 Movimento quota\n"
                 f"📊 Pressione reale\n"
                 f"🎯 NEXT GOAL"
             )
