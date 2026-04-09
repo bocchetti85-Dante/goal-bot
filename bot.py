@@ -41,7 +41,13 @@ def check_match(match):
             return None
 
         if "statistics" not in match or not match["statistics"]:
-            return None
+            # fallback minimo (senza stats)
+            minute = match["fixture"]["status"]["elapsed"]
+    
+            if minute and 30 <= minute <= 75:
+                return ("WATCH", None)
+    
+         return None
 
         stats = match["statistics"]
         if len(stats) < 2:
