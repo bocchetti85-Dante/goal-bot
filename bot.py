@@ -4,22 +4,24 @@ import requests
 from telegram import Bot
 import time
 
+# --- CONFIG ---
 TOKEN = os.getenv("TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 API_KEY = os.getenv("API_KEY")
 
 bot = Bot(token=TOKEN)
 
-previous_stats = {}
 sent_matches = {}
-COOLDOWN = 600  # 10 min
+COOLDOWN = 600  # 10 minuti
 
+# --- PRENDE MATCH LIVE ---
 def get_matches():
     url = "https://v3.football.api-sports.io/fixtures?live=all"
     headers = {"x-apisports-key": API_KEY}
     return requests.get(url, headers=headers).json().get("response", [])
 
 
+# --- LOGICA SBLOCCATA ---
 def check_match(match):
     try:
         fixture = match["fixture"]
@@ -29,6 +31,7 @@ def check_match(match):
         if minute is None or minute < 20 or minute > 85:
             return None
 
+        # ⏳ cooldown
         now = time.time()
         if match_id in sent_matches:
             if now - sent_matches[match_id] < COOLDOWN:
@@ -37,24 +40,24 @@ def check_match(match):
         goals_home = match["goals"]["home"]
         goals_away = match["goals"]["away"]
 
-        if not ((goals_home == 0 and goals_away == 0) or abs(goals_home - goals_away) == 1):
+        if goals_home is None or goals_away is None:
             return None
 
+        home = match["teams"]["home"]["name"]
+        away = match["teams"]["away"]["name"]
+
+        # --- CASO SENZA STATISTICHE ---
         if "statistics" not in match or not match["statistics"]:
-            # fallback minimo (senza stats)
-            minute = match["fixture"]["status"]["elapsed"]
-    
-            if minute and 30 <= minute <= 75:
+            if 30 <= minute <= 75:
                 return ("WATCH", None)
-    
-         return None
+            return None
 
         stats = match["statistics"]
         if len(stats) < 2:
             return None
 
-        home = stats[0]["statistics"]
-        away = stats[1]["statistics"]
+        home_stats = stats[0]["statistics"]
+        away_stats = stats[1]["statistics"]
 
         def safe(v):
             try:
@@ -62,59 +65,23 @@ def check_match(match):
             except:
                 return 0
 
-        sot_home = safe(home[0]["value"])
-        sot_away = safe(away[0]["value"])
-        shots_home = safe(home[2]["value"])
-        shots_away = safe(away[2]["value"])
-        danger_home = safe(home[9]["value"])
-        danger_away = safe(away[9]["value"])
+        sot_home = safe(home_stats[0]["value"])
+        sot_away = safe(away_stats[0]["value"])
+        shots_home = safe(home_stats[2]["value"])
+        shots_away = safe(away_stats[2]["value"])
 
         total_sot = sot_home + sot_away
         total_shots = shots_home + shots_away
-        total_danger = danger_home + danger_away
 
-        prev = previous_stats.get(match_id, {"danger": 0, "shots": 0})
+        # --- LOGICA SEMPLICE MA EFFICACE ---
 
-        danger_inc = total_danger - prev["danger"]
-        shots_inc = total_shots - prev["shots"]
-
-        previous_stats[match_id] = {
-            "danger": total_danger,
-            "shots": total_shots
-        }
-
-        # 🔥 filtro intelligente (NON troppo rigido)
-        pressure_ok = False
-
-        if total_sot >= 4 and total_danger >= 25:
-            pressure_ok = True
-
-        if total_sot >= 5 and total_shots >= 9:
-            pressure_ok = True
-
-        if danger_inc >= 8:
-            pressure_ok = True
-
-        if not pressure_ok:
-            return None
-
-        # 💣 dominio
-        if danger_home >= danger_away:
-            dominance = danger_home - danger_away
-            team = match["teams"]["home"]["name"]
-        else:
-            dominance = danger_away - danger_home
-            team = match["teams"]["away"]["name"]
-
-        if dominance < 5:
-            return None
-
-        # 🚨 ENTRY
-        if total_sot >= 5 and (danger_inc >= 4 or shots_inc >= 2):
+        # 🚨 ENTRY (forte pressione)
+        if total_sot >= 5:
+            team = home if sot_home > sot_away else away
             return ("ENTRY", team)
 
-        # ⚠️ WATCH
-        if danger_inc >= 3 or shots_inc >= 2:
+        # ⚠️ WATCH (pressione media)
+        if total_sot >= 3 or total_shots >= 8:
             return ("WATCH", None)
 
     except:
@@ -123,13 +90,14 @@ def check_match(match):
     return None
 
 
+# --- BOT ---
 async def main():
     print("🚀 BOT LIVE ATTIVO")
 
     while True:
         try:
             matches = get_matches()
-            print("Match trovati:", len(matches))
+            print("📊 Match trovati:", len(matches))
 
             for match in matches:
                 result = check_match(match)
@@ -155,7 +123,6 @@ async def main():
                         f"🔥 {team} spinge\n"
                         f"🎯 Goal possibile"
                     )
-
                 else:
                     text = (
                         f"⚠️ WATCH\n"
@@ -169,9 +136,10 @@ async def main():
                 sent_matches[match_id] = time.time()
 
         except Exception as e:
-            print("Errore:", e)
+            print("❌ ERRORE:", e)
 
         await asyncio.sleep(30)
 
 
+# --- AVVIO ---
 asyncio.run(main())
