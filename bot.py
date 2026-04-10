@@ -14,20 +14,32 @@ bot = Bot(token=TOKEN)
 sent_matches = {}
 COOLDOWN = 600  # 10 minuti
 
-# --- PRENDE MATCH LIVE ---
+# 🔥 CAMPIONATI TOP (MODIFICABILE)
+TOP_LEAGUES = [
+    "UEFA Champions League",
+    "UEFA Europa League",
+    "Premier League",
+    "La Liga",
+    "Serie A",
+    "Bundesliga",
+    "Ligue 1"
+]
+
+# --- MATCH ---
 def get_matches():
     url = "https://v3.football.api-sports.io/fixtures?live=all"
     headers = {"x-apisports-key": API_KEY}
     return requests.get(url, headers=headers).json().get("response", [])
 
 
-# --- LOGICA SBLOCCATA ---
+# --- LOGICA PRO ---
 def check_match(match):
     try:
         fixture = match["fixture"]
         match_id = fixture["id"]
         minute = fixture["status"]["elapsed"]
 
+        # ⏱ tempo
         if minute is None or minute < 20 or minute > 85:
             return None
 
@@ -36,6 +48,12 @@ def check_match(match):
         if match_id in sent_matches:
             if now - sent_matches[match_id] < COOLDOWN:
                 return None
+
+        # 🔥 FILTRO CAMPIONATO
+        league_name = match["league"]["name"]
+
+        if league_name not in TOP_LEAGUES:
+            return None
 
         goals_home = match["goals"]["home"]
         goals_away = match["goals"]["away"]
@@ -46,10 +64,8 @@ def check_match(match):
         home = match["teams"]["home"]["name"]
         away = match["teams"]["away"]["name"]
 
-        # --- CASO SENZA STATISTICHE ---
+        # --- SE NON CI SONO STATS → SCARTA (PRO)
         if "statistics" not in match or not match["statistics"]:
-            if 30 <= minute <= 75:
-                return ("WATCH", None)
             return None
 
         stats = match["statistics"]
@@ -73,15 +89,13 @@ def check_match(match):
         total_sot = sot_home + sot_away
         total_shots = shots_home + shots_away
 
-        # --- LOGICA SEMPLICE MA EFFICACE ---
-
-        # 🚨 ENTRY (forte pressione)
-        if total_sot >= 5:
+        # 💣 ENTRY (segnale forte)
+        if total_sot >= 6:
             team = home if sot_home > sot_away else away
             return ("ENTRY", team)
 
-        # ⚠️ WATCH (pressione media)
-        if total_sot >= 3 or total_shots >= 8:
+        # ⚠️ WATCH (solo se interessante)
+        if total_sot >= 4 and total_shots >= 10:
             return ("WATCH", None)
 
     except:
@@ -92,12 +106,12 @@ def check_match(match):
 
 # --- BOT ---
 async def main():
-    print("🚀 BOT LIVE ATTIVO")
+    print("🚀 BOT PRO ATTIVO")
 
     while True:
         try:
             matches = get_matches()
-            print("📊 Match trovati:", len(matches))
+            print("📊 Match:", len(matches))
 
             for match in matches:
                 result = check_match(match)
@@ -116,19 +130,19 @@ async def main():
 
                 if signal == "ENTRY":
                     text = (
-                        f"🚨 ENTRY\n"
+                        f"🚨 ENTRY PRO\n"
                         f"{home} vs {away}\n"
                         f"⚽ {gh}-{ga}\n"
                         f"⏱ {minute}'\n"
-                        f"🔥 {team} spinge\n"
-                        f"🎯 Goal possibile"
+                        f"🔥 {team} domina\n"
+                        f"🎯 GOAL IMMINENTE"
                     )
                 else:
                     text = (
-                        f"⚠️ WATCH\n"
+                        f"⚠️ WATCH PRO\n"
                         f"{home} vs {away}\n"
                         f"⏱ {minute}'\n"
-                        f"📈 pressione in crescita"
+                        f"📈 partita interessante"
                     )
 
                 await bot.send_message(chat_id=CHAT_ID, text=text)
@@ -136,10 +150,9 @@ async def main():
                 sent_matches[match_id] = time.time()
 
         except Exception as e:
-            print("❌ ERRORE:", e)
+            print("Errore:", e)
 
         await asyncio.sleep(30)
 
 
-# --- AVVIO ---
 asyncio.run(main())
