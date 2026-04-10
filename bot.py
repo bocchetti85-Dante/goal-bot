@@ -10,6 +10,8 @@ API_KEY = os.getenv("API_KEY")
 
 bot = Bot(token=TOKEN)
 
+previous_stats = {}
+previous_odds = {}
 sent_matches = {}
 COOLDOWN = 900  # 15 min
 
@@ -19,8 +21,7 @@ def get_matches():
     headers = {"x-apisports-key": API_KEY}
     return requests.get(url, headers=headers).json().get("response", [])
 
-
-# --- QUOTE NEXT GOAL ---
+# --- QUOTE ---
 def get_odds(fixture_id):
     url = f"https://v3.football.api-sports.io/odds?fixture={fixture_id}"
     headers = {"x-apisports-key": API_KEY}
@@ -38,25 +39,22 @@ def get_odds(fixture_id):
 
     return None
 
-
-# --- LOGICA PRO ---
+# --- LOGICA PRO+ ---
 def check_match(match):
     try:
         fixture = match["fixture"]
         match_id = fixture["id"]
         minute = fixture["status"]["elapsed"]
 
-        # ⏱ tempo
         if minute is None or minute < 30 or minute > 90:
             return None
 
-        # ⏳ cooldown
+        # cooldown
         now = time.time()
         if match_id in sent_matches:
             if now - sent_matches[match_id] < COOLDOWN:
                 return None
 
-        # --- stats obbligatorie ---
         if "statistics" not in match or not match["statistics"]:
             return None
 
@@ -77,23 +75,46 @@ def check_match(match):
         sot_away = safe(away_stats[0]["value"])
         shots_home = safe(home_stats[2]["value"])
         shots_away = safe(away_stats[2]["value"])
+        danger_home = safe(home_stats[9]["value"])
+        danger_away = safe(away_stats[9]["value"])
 
         total_sot = sot_home + sot_away
         total_shots = shots_home + shots_away
+        total_danger = danger_home + danger_away
 
-        # 🔥 pressione minima
+        # --- PREVIOUS (trend) ---
+        prev = previous_stats.get(match_id, {"danger": 0, "shots": 0})
+
+        danger_inc = total_danger - prev["danger"]
+        shots_inc = total_shots - prev["shots"]
+
+        previous_stats[match_id] = {
+            "danger": total_danger,
+            "shots": total_shots
+        }
+
+        # 🔥 BASE PRESSURE
         if total_sot < 5 or total_shots < 10:
             return None
 
-        # 💣 dominio
-        if sot_home > sot_away:
+        # ⚡ ACCELERAZIONE (KEY)
+        if danger_inc < 6 and shots_inc < 3:
+            return None
+
+        # 💣 DOMINIO
+        if danger_home > danger_away:
             team = match["teams"]["home"]["name"]
             side = "home"
+            dominance = danger_home - danger_away
         else:
             team = match["teams"]["away"]["name"]
             side = "away"
+            dominance = danger_away - danger_home
 
-        # 💰 quote
+        if dominance < 8:
+            return None
+
+        # 💰 QUOTE
         odds = get_odds(match_id)
         if not odds:
             return None
@@ -101,26 +122,38 @@ def check_match(match):
         home_odd, away_odd = odds
         odd = home_odd if side == "home" else away_odd
 
-        # 🎯 filtro quota PRO
         if odd < 1.8 or odd > 3.5:
             return None
 
-        return ("ENTRY", team, odd)
+        # 📉 MOVIMENTO QUOTA
+        prev_odd = previous_odds.get(match_id, odd)
+        odds_drop = prev_odd - odd
+        previous_odds[match_id] = odd
+
+        if odds_drop < 0:
+            return None
+
+        # ⏱ BOOST ZONA ORO
+        if 55 <= minute <= 75:
+            if danger_inc >= 5:
+                return ("ENTRY", team, odd)
+
+        # 🚨 ENTRY STANDARD
+        if total_sot >= 6 and danger_inc >= 6:
+            return ("ENTRY", team, odd)
 
     except:
         return None
 
     return None
 
-
 # --- BOT ---
 async def main():
-    print("🚀 BOT PROFESSIONALE ATTIVO")
+    print("🚀 BOT PRO+ ATTIVO")
 
     while True:
         try:
             matches = get_matches()
-            print("Match:", len(matches))
 
             for match in matches:
                 result = check_match(match)
@@ -129,7 +162,8 @@ async def main():
                     continue
 
                 match_id = match["fixture"]["id"]
-                signal, team, odd = result
+                team = result[1]
+                odd = result[2]
 
                 home = match["teams"]["home"]["name"]
                 away = match["teams"]["away"]["name"]
@@ -138,13 +172,15 @@ async def main():
                 ga = match["goals"]["away"]
 
                 text = (
-                    f"💣 NEXT GOAL PRO\n"
+                    f"💣 PRO+ SIGNAL\n"
                     f"{home} vs {away}\n"
                     f"⚽ {gh}-{ga}\n"
                     f"⏱ {minute}'\n"
-                    f"🔥 Team: {team}\n"
+                    f"🔥 {team}\n"
                     f"💰 Quota: {odd}\n"
-                    f"🎯 PROSSIMO GOAL"
+                    f"📉 Odds drop\n"
+                    f"🚀 Accelerazione\n"
+                    f"🎯 NEXT GOAL"
                 )
 
                 await bot.send_message(chat_id=CHAT_ID, text=text)
@@ -155,6 +191,5 @@ async def main():
             print("Errore:", e)
 
         await asyncio.sleep(30)
-
 
 asyncio.run(main())
