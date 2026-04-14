@@ -11,102 +11,89 @@ API_KEY = os.getenv("API_KEY")
 bot = Bot(token=TOKEN)
 
 sent_matches = {}
-COOLDOWN = 900
+COOLDOWN = 1200
 
 def get_matches():
     url = "https://v3.football.api-sports.io/fixtures?live=all"
     headers = {"x-apisports-key": API_KEY}
-    r = requests.get(url, headers=headers, timeout=10)
-    return r.json().get("response", [])
+    return requests.get(url, headers=headers, timeout=10).json().get("response", [])
 
-def safe_int(v):
-    try:
-        if v is None:
-            return 0
-        if isinstance(v, str):
-            v = v.replace("%","").strip()
-        return int(v)
-    except:
-        return 0
+def val(stats, names):
+    for row in stats:
+        t = row.get("type","").lower()
+        if t in names:
+            try:
+                v = row.get("value")
+                if v is None:
+                    return 0
+                return int(str(v).replace("%",""))
+            except:
+                return 0
+    return 0
 
 def check_match(match):
-    fixture = match["fixture"]
-    match_id = fixture["id"]
-    minute = fixture["status"]["elapsed"]
-
-    if minute is None or minute < 30 or minute > 90:
-        return None
-
-    now = time.time()
-    if match_id in sent_matches:
-        if now - sent_matches[match_id] < COOLDOWN:
+    try:
+        minute = match["fixture"]["status"]["elapsed"]
+        if minute is None or minute < 55 or minute > 85:
             return None
 
-    gh = match["goals"]["home"]
-    ga = match["goals"]["away"]
+        match_id = match["fixture"]["id"]
 
-    if gh is None or ga is None:
-        return None
+        now = time.time()
+        if match_id in sent_matches:
+            if now - sent_matches[match_id] < COOLDOWN:
+                return None
 
-    # solo partite ancora vive
-    if abs(gh - ga) > 1:
-        return None
+        gh = match["goals"]["home"]
+        ga = match["goals"]["away"]
 
-    score = 0
+        # partita viva
+        if abs(gh - ga) > 1:
+            return None
 
-    # timing
-    if 55 <= minute <= 80:
-        score += 3
-    else:
-        score += 1
-
-    # punteggio partita
-    if gh == ga:
-        score += 2
-    else:
-        score += 1
-
-    # stats bonus se presenti
-    stats = match.get("statistics")
-
-    if stats and len(stats) >= 2:
-        score += 2
+        stats = match.get("statistics")
+        if not stats or len(stats) < 2:
+            return None
 
         home = stats[0]["statistics"]
         away = stats[1]["statistics"]
 
-        total_sot = 0
+        sot_h = val(home, ["shots on goal","shots on target"])
+        sot_a = val(away, ["shots on goal","shots on target"])
 
-        for block in [home, away]:
-            for row in block:
-                t = row.get("type","").lower()
-                if t in ["shots on goal","shots on target"]:
-                    total_sot += safe_int(row.get("value"))
+        dang_h = val(home, ["dangerous attacks"])
+        dang_a = val(away, ["dangerous attacks"])
 
-        if total_sot >= 4:
-            score += 2
+        total_sot = sot_h + sot_a
 
-    # soglie realistiche
-    if score >= 6:
-        return "ENTRY"
+        # pressione vera
+        if total_sot < 5:
+            return None
 
-    if score >= 4:
-        return "WATCH"
+        # dominio
+        if dang_h > dang_a + 8:
+            team = match["teams"]["home"]["name"]
+        elif dang_a > dang_h + 8:
+            team = match["teams"]["away"]["name"]
+        else:
+            return None
 
-    return None
+        return team
+
+    except:
+        return None
 
 async def main():
-    print("BOT LIVE REALE")
+    print("BOT ENTRY PRO")
 
     while True:
         try:
             matches = get_matches()
-            print("LIVE:", len(matches))
 
             for match in matches:
-                result = check_match(match)
+                team = check_match(match)
 
-                if not result:
+                if not team:
                     continue
 
                 match_id = match["fixture"]["id"]
@@ -118,11 +105,12 @@ async def main():
                 ga = match["goals"]["away"]
 
                 text = (
-                    f"{'🚨 ENTRY' if result=='ENTRY' else '⚠️ WATCH'}\n"
+                    f"🚨 ENTRY PRO\n"
                     f"{home} vs {away}\n"
                     f"⚽ {gh}-{ga}\n"
                     f"⏱ {minute}'\n"
-                    f"🎯 Possibile prossimo goal"
+                    f"🔥 Dominio: {team}\n"
+                    f"🎯 Probabile prossimo goal"
                 )
 
                 await bot.send_message(chat_id=CHAT_ID, text=text)
@@ -130,7 +118,7 @@ async def main():
                 sent_matches[match_id] = time.time()
 
         except Exception as e:
-            print("ERRORE:", repr(e))
+            print(e)
 
         await asyncio.sleep(30)
 
