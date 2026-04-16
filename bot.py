@@ -11,7 +11,7 @@ API_KEY = os.getenv("API_KEY")
 bot = Bot(token=TOKEN)
 
 sent_matches = {}
-COOLDOWN = 1200
+COOLDOWN = 900
 
 def get_matches():
     url = "https://v3.football.api-sports.io/fixtures?live=all"
@@ -34,7 +34,7 @@ def val(stats, names):
 def check_match(match):
     try:
         minute = match["fixture"]["status"]["elapsed"]
-        if minute is None or minute < 55 or minute > 85:
+        if minute is None or minute < 45 or minute > 88:
             return None
 
         match_id = match["fixture"]["id"]
@@ -47,12 +47,18 @@ def check_match(match):
         gh = match["goals"]["home"]
         ga = match["goals"]["away"]
 
-        # partita viva
-        if abs(gh - ga) > 1:
+        if gh is None or ga is None:
+            return None
+
+        if abs(gh - ga) > 2:
             return None
 
         stats = match.get("statistics")
+
+        # Se stats mancanti ma minuto avanzato
         if not stats or len(stats) < 2:
+            if minute >= 70:
+                return "LIVE PUSH"
             return None
 
         home = stats[0]["statistics"]
@@ -66,34 +72,36 @@ def check_match(match):
 
         total_sot = sot_h + sot_a
 
-        # pressione vera
-        if total_sot < 5:
+        if total_sot < 4:
             return None
 
-        # dominio
-        if dang_h > dang_a + 8:
-            team = match["teams"]["home"]["name"]
-        elif dang_a > dang_h + 8:
-            team = match["teams"]["away"]["name"]
-        else:
-            return None
+        # Dominio morbido
+        if dang_h > dang_a + 5:
+            return match["teams"]["home"]["name"]
 
-        return team
+        if dang_a > dang_h + 5:
+            return match["teams"]["away"]["name"]
+
+        # Se equilibrio ma minuto alto
+        if minute >= 75 and total_sot >= 6:
+            return "MATCH OPEN"
 
     except:
         return None
 
+    return None
+
 async def main():
-    print("BOT ENTRY PRO")
+    print("BOT BALANCED PRO")
 
     while True:
         try:
             matches = get_matches()
 
             for match in matches:
-                team = check_match(match)
+                result = check_match(match)
 
-                if not team:
+                if not result:
                     continue
 
                 match_id = match["fixture"]["id"]
@@ -105,12 +113,12 @@ async def main():
                 ga = match["goals"]["away"]
 
                 text = (
-                    f"🚨 ENTRY PRO\n"
+                    f"🚨 ENTRY BALANCED\n"
                     f"{home} vs {away}\n"
                     f"⚽ {gh}-{ga}\n"
                     f"⏱ {minute}'\n"
-                    f"🔥 Dominio: {team}\n"
-                    f"🎯 Probabile prossimo goal"
+                    f"🔥 Focus: {result}\n"
+                    f"🎯 Possibile goal live"
                 )
 
                 await bot.send_message(chat_id=CHAT_ID, text=text)
