@@ -1,8 +1,8 @@
 import asyncio
 import os
 import requests
-from telegram import Bot
 import time
+from telegram import Bot
 
 # =========================
 # CONFIG
@@ -13,12 +13,30 @@ API_KEY = os.getenv("API_KEY")
 
 bot = Bot(token=TOKEN)
 
-sent_matches = {}
-COOLDOWN = 900   # 15 minuti
+# =========================
+# MEMORY
+# =========================
+signal_memory = {}
+# struttura:
+# match_id: {
+#   "start": timestamp,
+#   "last": timestamp,
+#   "count": int,
+#   "last_push": bool,
+#   "score": "1-0"
+# }
+
+# =========================
+# SETTINGS
+# =========================
+CHECK_INTERVAL = 30
+REMINDER_EVERY = 60       # ogni minuto
+MAX_REMINDERS = 5
+COOLDOWN_NEW = 600        # dopo chiusura segnale
 
 
 # =========================
-# LIVE MATCHES
+# API LIVE MATCHES
 # =========================
 def get_matches():
     url = "https://v3.football.api-sports.io/fixtures?live=all"
@@ -33,7 +51,7 @@ def get_matches():
 
 
 # =========================
-# SAFE VALUE
+# READ STATS
 # =========================
 def val(stats, names):
     for row in stats:
@@ -58,50 +76,37 @@ def val(stats, names):
 
 
 # =========================
-# CHECK MATCH
+# MATCH STILL VALID?
 # =========================
-def check_match(match):
+def analyze_match(match):
     try:
         fixture = match["fixture"]
         status = fixture["status"]
 
-        match_id = fixture["id"]
         minute = status["elapsed"]
+        extra = status.get("extra")
 
         if minute is None:
             return None
 
-        # -------------------------
-        # FINESTRA ORARIA PRO
-        # 70-89 normali
-        # 90+ solo se recupero >=6
-        # -------------------------
+        # Finestra tempo:
+        # 70-89 normale
+        # 90+ solo con recupero >=6
         if 70 <= minute <= 89:
             pass
-
         elif minute >= 90:
-            extra = status.get("extra")
-
             if extra is None or extra < 6:
                 return None
         else:
             return None
 
-        # cooldown
-        now = time.time()
-
-        if match_id in sent_matches:
-            if now - sent_matches[match_id] < COOLDOWN:
-                return None
-
-        # risultato
         gh = match["goals"]["home"]
         ga = match["goals"]["away"]
 
         if gh is None or ga is None:
             return None
 
-        # partita ancora viva
+        # no partite morte
         if abs(gh - ga) > 2:
             return None
 
@@ -110,100 +115,164 @@ def check_match(match):
 
         stats = match.get("statistics")
 
-        # Se stats mancanti ma recupero alto
         if not stats or len(stats) < 2:
-            if minute >= 90:
-                return "FINAL PUSH"
+            # senza stats finale vivo
+            if minute >= 85:
+                return {
+                    "minute": minute,
+                    "extra": extra,
+                    "focus": "FINAL PUSH",
+                    "score": f"{gh}-{ga}"
+                }
             return None
 
         home = stats[0]["statistics"]
         away = stats[1]["statistics"]
 
-        # shots on target
         sot_h = val(home, ["shots on goal", "shots on target"])
         sot_a = val(away, ["shots on goal", "shots on target"])
 
-        # dangerous attacks
         dang_h = val(home, ["dangerous attacks"])
         dang_a = val(away, ["dangerous attacks"])
 
         total_sot = sot_h + sot_a
 
-        # minimo pressione
+        # pressione minima
         if total_sot < 4:
             return None
 
-        # dominio casa
+        # dominio
         if dang_h > dang_a + 5:
-            return home_name
+            focus = home_name
+        elif dang_a > dang_h + 5:
+            focus = away_name
+        elif minute >= 82 and total_sot >= 6:
+            focus = "MATCH OPEN"
+        else:
+            return None
 
-        # dominio ospite
-        if dang_a > dang_h + 5:
-            return away_name
-
-        # partita apertissima finale
-        if minute >= 82 and total_sot >= 6:
-            return "MATCH OPEN"
+        return {
+            "minute": minute,
+            "extra": extra,
+            "focus": focus,
+            "score": f"{gh}-{ga}"
+        }
 
     except:
         return None
 
-    return None
+
+# =========================
+# FORMAT MINUTE
+# =========================
+def minute_text(minute, extra):
+    if minute >= 90 and extra:
+        return f"{minute}+{extra}'"
+    return f"{minute}'"
 
 
 # =========================
-# BOT LOOP
+# SEND MESSAGE
+# =========================
+async def send_alert(kind, match, info):
+    home = match["teams"]["home"]["name"]
+    away = match["teams"]["away"]["name"]
+    gh = match["goals"]["home"]
+    ga = match["goals"]["away"]
+
+    mt = minute_text(info["minute"], info["extra"])
+
+    if kind == "ENTRY":
+        text = (
+            f"🚨 ENTRY MOMENTUM\n"
+            f"{home} vs {away}\n"
+            f"⚽ {gh}-{ga}\n"
+            f"⏱ {mt}\n"
+            f"🔥 Focus: {info['focus']}\n"
+            f"🎯 Pressione alta"
+        )
+
+    elif kind == "REMINDER":
+        text = (
+            f"🔥 STILL LIVE\n"
+            f"{home} vs {away}\n"
+            f"⚽ {gh}-{ga}\n"
+            f"⏱ {mt}\n"
+            f"📈 Pressione continua"
+        )
+
+    else:  # LAST PUSH
+        text = (
+            f"💣 LAST PUSH\n"
+            f"{home} vs {away}\n"
+            f"⚽ {gh}-{ga}\n"
+            f"⏱ {mt}\n"
+            f"🔥 Finale acceso"
+        )
+
+    await bot.send_message(chat_id=CHAT_ID, text=text)
+
+
+# =========================
+# MAIN LOOP
 # =========================
 async def main():
-    print("🚀 BOT PRO 70-90 ATTIVO")
+    print("🚀 BOT V3 MOMENTUM ATTIVO")
 
     while True:
         try:
             matches = get_matches()
-            print("LIVE MATCH:", len(matches))
+            now = time.time()
 
             for match in matches:
-                result = check_match(match)
-
-                if not result:
-                    continue
-
                 match_id = match["fixture"]["id"]
 
-                home = match["teams"]["home"]["name"]
-                away = match["teams"]["away"]["name"]
+                info = analyze_match(match)
 
-                minute = match["fixture"]["status"]["elapsed"]
-                extra = match["fixture"]["status"].get("extra")
+                # se non più valida cancella memoria
+                if not info:
+                    if match_id in signal_memory:
+                        del signal_memory[match_id]
+                    continue
 
-                gh = match["goals"]["home"]
-                ga = match["goals"]["away"]
+                # nuova entry
+                if match_id not in signal_memory:
+                    await send_alert("ENTRY", match, info)
 
-                minute_text = f"{minute}'"
+                    signal_memory[match_id] = {
+                        "start": now,
+                        "last": now,
+                        "count": 0,
+                        "last_push": False,
+                        "score": info["score"]
+                    }
+                    continue
 
-                if minute >= 90 and extra:
-                    minute_text = f"{minute}+{extra}'"
+                mem = signal_memory[match_id]
 
-                text = (
-                    f"🚨 ENTRY PRO\n"
-                    f"{home} vs {away}\n"
-                    f"⚽ {gh}-{ga}\n"
-                    f"⏱ {minute_text}\n"
-                    f"🔥 Focus: {result}\n"
-                    f"🎯 Possibile prossimo goal"
-                )
+                # se cambia punteggio resetta
+                if mem["score"] != info["score"]:
+                    del signal_memory[match_id]
+                    continue
 
-                await bot.send_message(
-                    chat_id=CHAT_ID,
-                    text=text
-                )
+                # reminder ogni minuto max 5
+                if (
+                    mem["count"] < MAX_REMINDERS
+                    and now - mem["last"] >= REMINDER_EVERY
+                ):
+                    await send_alert("REMINDER", match, info)
+                    mem["last"] = now
+                    mem["count"] += 1
 
-                sent_matches[match_id] = time.time()
+                # last push 85+
+                if info["minute"] >= 85 and not mem["last_push"]:
+                    await send_alert("LAST PUSH", match, info)
+                    mem["last_push"] = True
 
         except Exception as e:
             print("ERRORE:", e)
 
-        await asyncio.sleep(30)
+        await asyncio.sleep(CHECK_INTERVAL)
 
 
 # =========================
