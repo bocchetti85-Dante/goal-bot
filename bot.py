@@ -4,6 +4,9 @@ import requests
 from telegram import Bot
 import time
 
+# =========================
+# CONFIG
+# =========================
 TOKEN = os.getenv("TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 API_KEY = os.getenv("API_KEY")
@@ -11,79 +14,135 @@ API_KEY = os.getenv("API_KEY")
 bot = Bot(token=TOKEN)
 
 sent_matches = {}
-COOLDOWN = 900
+COOLDOWN = 900   # 15 minuti
 
+
+# =========================
+# LIVE MATCHES
+# =========================
 def get_matches():
     url = "https://v3.football.api-sports.io/fixtures?live=all"
     headers = {"x-apisports-key": API_KEY}
-    return requests.get(url, headers=headers, timeout=10).json().get("response", [])
 
+    try:
+        r = requests.get(url, headers=headers, timeout=10)
+        data = r.json()
+        return data.get("response", [])
+    except:
+        return []
+
+
+# =========================
+# SAFE VALUE
+# =========================
 def val(stats, names):
     for row in stats:
-        t = row.get("type","").lower()
+        t = row.get("type", "").lower()
+
         if t in names:
             try:
                 v = row.get("value")
+
                 if v is None:
                     return 0
-                return int(str(v).replace("%",""))
+
+                if isinstance(v, str):
+                    v = v.replace("%", "").strip()
+
+                return int(v)
+
             except:
                 return 0
+
     return 0
 
+
+# =========================
+# CHECK MATCH
+# =========================
 def check_match(match):
     try:
-        minute = match["fixture"]["status"]["elapsed"]
-        if minute is None or minute < 45 or minute > 88:
+        fixture = match["fixture"]
+        status = fixture["status"]
+
+        match_id = fixture["id"]
+        minute = status["elapsed"]
+
+        if minute is None:
             return None
 
-        match_id = match["fixture"]["id"]
+        # -------------------------
+        # FINESTRA ORARIA PRO
+        # 70-89 normali
+        # 90+ solo se recupero >=6
+        # -------------------------
+        if 70 <= minute <= 89:
+            pass
 
+        elif minute >= 90:
+            extra = status.get("extra")
+
+            if extra is None or extra < 6:
+                return None
+        else:
+            return None
+
+        # cooldown
         now = time.time()
+
         if match_id in sent_matches:
             if now - sent_matches[match_id] < COOLDOWN:
                 return None
 
+        # risultato
         gh = match["goals"]["home"]
         ga = match["goals"]["away"]
 
         if gh is None or ga is None:
             return None
 
+        # partita ancora viva
         if abs(gh - ga) > 2:
             return None
 
+        home_name = match["teams"]["home"]["name"]
+        away_name = match["teams"]["away"]["name"]
+
         stats = match.get("statistics")
 
-        # Se stats mancanti ma minuto avanzato
+        # Se stats mancanti ma recupero alto
         if not stats or len(stats) < 2:
-            if minute >= 70:
-                return "LIVE PUSH"
+            if minute >= 90:
+                return "FINAL PUSH"
             return None
 
         home = stats[0]["statistics"]
         away = stats[1]["statistics"]
 
-        sot_h = val(home, ["shots on goal","shots on target"])
-        sot_a = val(away, ["shots on goal","shots on target"])
+        # shots on target
+        sot_h = val(home, ["shots on goal", "shots on target"])
+        sot_a = val(away, ["shots on goal", "shots on target"])
 
+        # dangerous attacks
         dang_h = val(home, ["dangerous attacks"])
         dang_a = val(away, ["dangerous attacks"])
 
         total_sot = sot_h + sot_a
 
+        # minimo pressione
         if total_sot < 4:
             return None
 
-        # Dominio morbido
+        # dominio casa
         if dang_h > dang_a + 5:
-            return match["teams"]["home"]["name"]
+            return home_name
 
+        # dominio ospite
         if dang_a > dang_h + 5:
-            return match["teams"]["away"]["name"]
+            return away_name
 
-        # Se equilibrio ma minuto alto
-        if minute >= 75 and total_sot >= 6:
+        # partita apertissima finale
+        if minute >= 82 and total_sot >= 6:
             return "MATCH OPEN"
 
     except:
@@ -91,12 +150,17 @@ def check_match(match):
 
     return None
 
+
+# =========================
+# BOT LOOP
+# =========================
 async def main():
-    print("BOT BALANCED PRO")
+    print("🚀 BOT PRO 70-90 ATTIVO")
 
     while True:
         try:
             matches = get_matches()
+            print("LIVE MATCH:", len(matches))
 
             for match in matches:
                 result = check_match(match)
@@ -108,26 +172,41 @@ async def main():
 
                 home = match["teams"]["home"]["name"]
                 away = match["teams"]["away"]["name"]
+
                 minute = match["fixture"]["status"]["elapsed"]
+                extra = match["fixture"]["status"].get("extra")
+
                 gh = match["goals"]["home"]
                 ga = match["goals"]["away"]
 
+                minute_text = f"{minute}'"
+
+                if minute >= 90 and extra:
+                    minute_text = f"{minute}+{extra}'"
+
                 text = (
-                    f"🚨 ENTRY BALANCED\n"
+                    f"🚨 ENTRY PRO\n"
                     f"{home} vs {away}\n"
                     f"⚽ {gh}-{ga}\n"
-                    f"⏱ {minute}'\n"
+                    f"⏱ {minute_text}\n"
                     f"🔥 Focus: {result}\n"
-                    f"🎯 Possibile goal live"
+                    f"🎯 Possibile prossimo goal"
                 )
 
-                await bot.send_message(chat_id=CHAT_ID, text=text)
+                await bot.send_message(
+                    chat_id=CHAT_ID,
+                    text=text
+                )
 
                 sent_matches[match_id] = time.time()
 
         except Exception as e:
-            print(e)
+            print("ERRORE:", e)
 
         await asyncio.sleep(30)
 
+
+# =========================
+# START
+# =========================
 asyncio.run(main())
