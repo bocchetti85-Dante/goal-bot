@@ -4,40 +4,23 @@ import requests
 import time
 from telegram import Bot
 
-# =========================
+# =====================================
 # CONFIG
-# =========================
+# =====================================
 TOKEN = os.getenv("TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 API_KEY = os.getenv("API_KEY")
 
 bot = Bot(token=TOKEN)
 
-# =========================
-# MEMORY
-# =========================
-signal_memory = {}
-# struttura:
-# match_id: {
-#   "start": timestamp,
-#   "last": timestamp,
-#   "count": int,
-#   "last_push": bool,
-#   "score": "1-0"
-# }
-
-# =========================
-# SETTINGS
-# =========================
 CHECK_INTERVAL = 30
-REMINDER_EVERY = 60       # ogni minuto
-MAX_REMINDERS = 5
-COOLDOWN_NEW = 600        # dopo chiusura segnale
+COOLDOWN = 600  # 10 minuti tra segnali stessa partita
 
+sent_matches = {}
 
-# =========================
+# =====================================
 # API LIVE MATCHES
-# =========================
+# =====================================
 def get_matches():
     url = "https://v3.football.api-sports.io/fixtures?live=all"
     headers = {"x-apisports-key": API_KEY}
@@ -50,10 +33,10 @@ def get_matches():
         return []
 
 
-# =========================
-# READ STATS
-# =========================
-def val(stats, names):
+# =====================================
+# LETTURA STATISTICHE
+# =====================================
+def stat(stats, names):
     for row in stats:
         t = row.get("type", "").lower()
 
@@ -75,29 +58,15 @@ def val(stats, names):
     return 0
 
 
-# =========================
-# MATCH STILL VALID?
-# =========================
+# =====================================
+# FILTRO PROFESSIONALE (COME FOTO)
+# =====================================
 def analyze_match(match):
     try:
         fixture = match["fixture"]
-        status = fixture["status"]
+        minute = fixture["status"]["elapsed"]
 
-        minute = status["elapsed"]
-        extra = status.get("extra")
-
-        if minute is None:
-            return None
-
-        # Finestra tempo:
-        # 70-89 normale
-        # 90+ solo con recupero >=6
-        if 70 <= minute <= 89:
-            pass
-        elif minute >= 90:
-            if extra is None or extra < 6:
-                return None
-        else:
+        if minute is None or minute < 77:
             return None
 
         gh = match["goals"]["home"]
@@ -106,118 +75,131 @@ def analyze_match(match):
         if gh is None or ga is None:
             return None
 
-        # no partite morte
-        if abs(gh - ga) > 2:
-            return None
+        total_goals = gh + ga
 
-        home_name = match["teams"]["home"]["name"]
-        away_name = match["teams"]["away"]["name"]
+        # Goals ≤ 2
+        if total_goals > 2:
+            return None
 
         stats = match.get("statistics")
 
         if not stats or len(stats) < 2:
-            # senza stats finale vivo
-            if minute >= 85:
-                return {
-                    "minute": minute,
-                    "extra": extra,
-                    "focus": "FINAL PUSH",
-                    "score": f"{gh}-{ga}"
-                }
             return None
 
         home = stats[0]["statistics"]
         away = stats[1]["statistics"]
 
-        sot_h = val(home, ["shots on goal", "shots on target"])
-        sot_a = val(away, ["shots on goal", "shots on target"])
+        # xG
+        xg_h = stat(home, ["expected goals"])
+        xg_a = stat(away, ["expected goals"])
+        total_xg = xg_h + xg_a
 
-        dang_h = val(home, ["dangerous attacks"])
-        dang_a = val(away, ["dangerous attacks"])
+        if total_xg < 1.9:
+            return None
 
+        # Shots on Target
+        sot_h = stat(home, ["shots on goal", "shots on target"])
+        sot_a = stat(away, ["shots on goal", "shots on target"])
         total_sot = sot_h + sot_a
 
-        # pressione minima
-        if total_sot < 4:
+        if total_sot < 6:
             return None
 
-        # dominio
-        if dang_h > dang_a + 5:
-            focus = home_name
-        elif dang_a > dang_h + 5:
-            focus = away_name
-        elif minute >= 82 and total_sot >= 6:
-            focus = "MATCH OPEN"
-        else:
+        # Total Shots
+        sh_h = stat(home, ["total shots"])
+        sh_a = stat(away, ["total shots"])
+        total_shots = sh_h + sh_a
+
+        if total_shots < 14:
             return None
+
+        # Dangerous Attacks
+        da_h = stat(home, ["dangerous attacks"])
+        da_a = stat(away, ["dangerous attacks"])
+        total_da = da_h + da_a
+
+        if total_da < 90:
+            return None
+
+        # Corners
+        c_h = stat(home, ["corner kicks"])
+        c_a = stat(away, ["corner kicks"])
+        total_corners = c_h + c_a
+
+        if total_corners < 8:
+            return None
+
+        # Difference Dangerous Attacks ≥ 18
+        diff_da = abs(da_h - da_a)
+
+        if diff_da < 18:
+            return None
+
+        # Momentum ≥ 70
+        # formula interna professionale
+        momentum = (
+            total_sot * 6 +
+            total_shots * 2 +
+            total_xg * 15 +
+            total_corners * 2 +
+            diff_da * 1.2
+        )
+
+        if momentum < 70:
+            return None
+
+        # squadra dominante
+        if da_h > da_a:
+            focus = match["teams"]["home"]["name"]
+        else:
+            focus = match["teams"]["away"]["name"]
 
         return {
             "minute": minute,
-            "extra": extra,
+            "score": f"{gh}-{ga}",
             "focus": focus,
-            "score": f"{gh}-{ga}"
+            "momentum": round(momentum),
+            "xg": round(total_xg, 2),
+            "sot": total_sot,
+            "shots": total_shots,
+            "danger": total_da,
+            "corners": total_corners
         }
 
     except:
         return None
 
 
-# =========================
-# FORMAT MINUTE
-# =========================
-def minute_text(minute, extra):
-    if minute >= 90 and extra:
-        return f"{minute}+{extra}'"
-    return f"{minute}'"
-
-
-# =========================
-# SEND MESSAGE
-# =========================
-async def send_alert(kind, match, info):
+# =====================================
+# INVIO TELEGRAM
+# =====================================
+async def send_signal(match, info):
     home = match["teams"]["home"]["name"]
     away = match["teams"]["away"]["name"]
-    gh = match["goals"]["home"]
-    ga = match["goals"]["away"]
 
-    mt = minute_text(info["minute"], info["extra"])
-
-    if kind == "ENTRY":
-        text = (
-            f"🚨 ENTRY MOMENTUM\n"
-            f"{home} vs {away}\n"
-            f"⚽ {gh}-{ga}\n"
-            f"⏱ {mt}\n"
-            f"🔥 Focus: {info['focus']}\n"
-            f"🎯 Pressione alta"
-        )
-
-    elif kind == "REMINDER":
-        text = (
-            f"🔥 STILL LIVE\n"
-            f"{home} vs {away}\n"
-            f"⚽ {gh}-{ga}\n"
-            f"⏱ {mt}\n"
-            f"📈 Pressione continua"
-        )
-
-    else:  # LAST PUSH
-        text = (
-            f"💣 LAST PUSH\n"
-            f"{home} vs {away}\n"
-            f"⚽ {gh}-{ga}\n"
-            f"⏱ {mt}\n"
-            f"🔥 Finale acceso"
-        )
+    text = (
+        f"🚨 NEXT GOAL PRO SIGNAL\n\n"
+        f"{home} vs {away}\n"
+        f"⚽ {info['score']}\n"
+        f"⏱ {info['minute']}'\n\n"
+        f"🔥 Dominio: {info['focus']}\n"
+        f"📈 Momentum: {info['momentum']}\n"
+        f"xG: {info['xg']}\n"
+        f"🎯 SOT: {info['sot']}\n"
+        f"🚀 Shots: {info['shots']}\n"
+        f"⚠️ Dangerous: {info['danger']}\n"
+        f"🏁 Corners: {info['corners']}\n\n"
+        f"💣 Probabile Prossimo Goal"
+    )
 
     await bot.send_message(chat_id=CHAT_ID, text=text)
 
 
-# =========================
-# MAIN LOOP
-# =========================
+# =====================================
+# LOOP
+# =====================================
 async def main():
-    print("🚀 BOT V3 MOMENTUM ATTIVO")
+    print("🚀 NEXT GOAL ELITE ATTIVO")
 
     while True:
         try:
@@ -227,47 +209,16 @@ async def main():
             for match in matches:
                 match_id = match["fixture"]["id"]
 
+                # cooldown
+                if match_id in sent_matches:
+                    if now - sent_matches[match_id] < COOLDOWN:
+                        continue
+
                 info = analyze_match(match)
 
-                # se non più valida cancella memoria
-                if not info:
-                    if match_id in signal_memory:
-                        del signal_memory[match_id]
-                    continue
-
-                # nuova entry
-                if match_id not in signal_memory:
-                    await send_alert("ENTRY", match, info)
-
-                    signal_memory[match_id] = {
-                        "start": now,
-                        "last": now,
-                        "count": 0,
-                        "last_push": False,
-                        "score": info["score"]
-                    }
-                    continue
-
-                mem = signal_memory[match_id]
-
-                # se cambia punteggio resetta
-                if mem["score"] != info["score"]:
-                    del signal_memory[match_id]
-                    continue
-
-                # reminder ogni minuto max 5
-                if (
-                    mem["count"] < MAX_REMINDERS
-                    and now - mem["last"] >= REMINDER_EVERY
-                ):
-                    await send_alert("REMINDER", match, info)
-                    mem["last"] = now
-                    mem["count"] += 1
-
-                # last push 85+
-                if info["minute"] >= 85 and not mem["last_push"]:
-                    await send_alert("LAST PUSH", match, info)
-                    mem["last_push"] = True
+                if info:
+                    await send_signal(match, info)
+                    sent_matches[match_id] = now
 
         except Exception as e:
             print("ERRORE:", e)
@@ -275,7 +226,7 @@ async def main():
         await asyncio.sleep(CHECK_INTERVAL)
 
 
-# =========================
+# =====================================
 # START
-# =========================
+# =====================================
 asyncio.run(main())
